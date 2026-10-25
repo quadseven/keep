@@ -1,0 +1,16 @@
+# Claude Code — read this first
+
+**This repository is public.** Read `AGENTS.md` at the repo root before
+writing anything — code, an issue, a PR body, a comment, a commit message.
+It is the actual policy; this file is just the pointer to it, kept
+separate so the substantive rules live in the one place every AI tool
+(not just Claude Code) already knows to look for them.
+
+If `AGENTS.md` is missing from this repo, stop and say so rather than
+proceeding without it — its absence is a gap to fix, not permission to
+skip the policy.
+
+<!-- Everything above the next line is synced from quadseven/infra-public and replaced on every sync. Put this repo's own content below it. -->
+<!-- repo-specific below -->
+
+Keep's own rules (no deployment data in git, collectors fail closed, documentation-range test data) are in the Keep section of `AGENTS.md`.

@@ -1,0 +1,64 @@
+# Grug review config for Keep. Read from the base commit, so edits apply
+# after merge. Keys: docs/REPO_CONFIG.md in the grug repo.
+
+min_inline_severity: low
+
+path_instructions:
+  - path: "**"
+    instructions: >-
+      This repository is public and holds only the generic product. Flag any
+      real hostname, domain, tailnet name, IP address outside the
+      documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,
+      2001:db8::/32), MAC address outside 00:00:5E:00:53:00/24, serial number,
+      machine ID, account ID, person's name, local user path, or credential,
+      in code, comments, fixtures or docs. Flag any deployment-specific value
+      hardcoded instead of read from config, and any secret not read from the
+      environment or a secret store at runtime. Flag non-ASCII characters.
+
+  - path: "**/*collector*/**"
+    instructions: &collector >-
+      Collectors must fail closed. A collector that cannot reach its source,
+      cannot authenticate, times out, or gets a malformed or partial response
+      must record the source as failed or unknown, never as healthy, up to
+      date, or free of vulnerabilities. Flag any default that turns missing
+      data into zero (zero updates, zero vulnerabilities, antivirus
+      protected), any broad exception handler that swallows an error without
+      recording the source and reason, any network call without both a
+      connect timeout and a total timeout, and any retry loop without a
+      bound. Each collector needs a test that feeds it a failure and asserts
+      the failure is reported.
+
+  - path: "**/*collector*"
+    instructions: *collector
+
+  - path: "**/*test*/**"
+    instructions: &tests >-
+      Test data must be visibly fake. IPs come only from 192.0.2.0/24,
+      198.51.100.0/24, 203.0.113.0/24 or 2001:db8::/32. Hostnames use
+      example.com, example.net, .example, .test or .invalid. MACs use
+      00:00:5E:00:53:xx. Serials and IDs look like TEST-SERIAL-0001. Flag any
+      fixture that looks like real collected output (a real SBOM, scan
+      result, inventory dump or log). Flag tests that only cover the happy
+      path of a collector with no failure case.
+
+  - path: "**/*test*"
+    instructions: *tests
+
+  - path: "**/*.example*"
+    instructions: >-
+      Example config must contain every key the code reads, each with an
+      obviously placeholder value (YOUR_VALUE_HERE, example.com, a
+      documentation-range IP). Flag any value that looks real.
+
+  - path: ".github/workflows/**"
+    instructions: >-
+      Flag third-party actions not pinned to a full commit SHA, jobs with no
+      timeout-minutes, curl without --connect-timeout and --max-time,
+      secrets echoed to logs, and pull_request_target or self-hosted runners
+      reachable from fork pull requests.
+
+  - path: "**/*.md"
+    instructions: >-
+      Docs are public. Examples use documentation-range addresses and
+      placeholder names. Flag any real hostname, address, person's name, or
+      a sentence describing a specific real network or household.
