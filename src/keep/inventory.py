@@ -172,27 +172,32 @@ def _gaps(observation: Observation, record: SourceRecord) -> list[str]:
     return gaps
 
 
+def _device(group: list[Observation], by_source: dict[str, SourceRecord], now: datetime) -> Device:
+    managed = sorted(group, key=lambda o: o.kind is Kind.CLIENT)
+    device = Device(name=managed[0].name, kinds={o.kind for o in group}, observations=group)
+    for observation in group:
+        device.findings.extend(_findings(observation, now))
+        device.gaps.extend(_gaps(observation, by_source[observation.source]))
+    device.findings.sort(key=lambda finding: -int(finding.severity))
+    return device
+
+
+def _bucket(device: Device, view: View) -> list[Device]:
+    if device.kinds == {Kind.CLIENT}:
+        return view.clients
+    if device.findings:
+        return view.attention
+    return view.unknown if device.gaps else view.healthy
+
+
 def build(records: Iterable[SourceRecord], now: datetime) -> View:
     records = list(records)
     by_source = {record.name: record for record in records}
     observations = [o for record in records for o in record.observations]
     view = View(attention=[], unknown=[], healthy=[], clients=[])
     for group in _join(observations):
-        kinds = {o.kind for o in group}
-        managed = sorted(group, key=lambda o: o.kind is Kind.CLIENT)
-        device = Device(name=managed[0].name, kinds=kinds, observations=group)
-        for observation in group:
-            device.findings.extend(_findings(observation, now))
-            device.gaps.extend(_gaps(observation, by_source[observation.source]))
-        device.findings.sort(key=lambda finding: -int(finding.severity))
-        if kinds == {Kind.CLIENT}:
-            view.clients.append(device)
-        elif device.findings:
-            view.attention.append(device)
-        elif device.gaps:
-            view.unknown.append(device)
-        else:
-            view.healthy.append(device)
+        device = _device(group, by_source, now)
+        _bucket(device, view).append(device)
     for bucket in (view.attention, view.unknown, view.healthy, view.clients):
         bucket.sort(key=lambda device: device.sort_key)
     return view

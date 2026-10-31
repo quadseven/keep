@@ -87,7 +87,7 @@ def from_env() -> FastAPI:
         UnifiCollector(
             env("KEEP_UNIFI_BASE_URL"),
             env("KEEP_UNIFI_API_KEY"),
-            env("KEEP_UNIFI_CERT_SHA256"),
+            env("KEEP_UNIFI_CERT_PEM"),
             env("KEEP_UNIFI_SITE") or "default",
         ),
     ]

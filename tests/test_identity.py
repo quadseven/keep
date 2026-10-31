@@ -4,7 +4,7 @@ import threading
 
 import pytest
 
-from fixtures import TAILNET_CLIENT
+from fixtures import TAILNET_CLIENT, TEST_TAILNET
 from keep.identity import Gate, Who, localapi_whois
 
 PROXY = "192.0.2.0/31"
@@ -23,6 +23,7 @@ def gate(who=OPERATOR, **over):
         allowed_logins={"Operator@example.com"},
         allowed_nodes={"TEST-NODE-2"},
         whois=lambda _: who,
+        tailnet=TEST_TAILNET,
     )
     fields.update(over)
     return Gate(**fields)

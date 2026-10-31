@@ -31,8 +31,8 @@ def client(**over):
 def api(devices=None, clients=None, rc="ok"):
     calls = []
 
-    def fetch(url, headers=None, pin_sha256=None):
-        calls.append((url, headers, pin_sha256))
+    def fetch(url, headers=None, trust_pem=None):
+        calls.append((url, headers, trust_pem))
         rows = devices if url.endswith("stat/device") else clients
         return {"meta": {"rc": rc}, "data": rows if rows is not None else []}
 
@@ -41,15 +41,15 @@ def api(devices=None, clients=None, rc="ok"):
 
 
 def collector(fetch):
-    return UnifiCollector(BASE, "TEST-KEY", "ab" * 32, fetch=fetch)
+    return UnifiCollector(BASE, "TEST-KEY", "TEST-PEM", fetch=fetch)
 
 
-def test_it_reads_devices_and_clients_through_the_pin():
+def test_it_reads_devices_and_clients_through_the_trusted_cert():
     fetch = api([device()], [client()])
     d, c = collector(fetch).collect()
     assert d.kind is Kind.NETWORK_DEVICE and d.online is True and d.firmware_pending is False
     assert c.kind is Kind.CLIENT and c.name == "client-1.example" and c.detail == "wired"
-    assert all(pin == "ab" * 32 for _, _, pin in fetch.calls)
+    assert all(pem == "TEST-PEM" for _, _, pem in fetch.calls)
 
 
 def test_a_disconnected_device_is_offline():

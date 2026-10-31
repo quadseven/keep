@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
-from fixtures import TAILNET_CLIENT
+from fixtures import TAILNET_CLIENT, TEST_TAILNET
 from keep.identity import Gate, Who
 from keep.model import Kind, Observation, SourceRecord, SourceState
 from keep.web import create_app
@@ -49,7 +49,9 @@ def obs(name="<b>host</b>", **over):
 
 def client(records, token=TOKEN):
     who = Who("operator@example.com", "TEST-NODE-1")
-    gate = Gate(token, ["127.0.0.1/32"], {"operator@example.com"}, set(), lambda _: who)
+    gate = Gate(
+        token, ["127.0.0.1/32"], {"operator@example.com"}, set(), lambda _: who, TEST_TAILNET
+    )
     app = create_app(gate, FakeRunner(records))
     return TestClient(app, client=("127.0.0.1", 5000))
 

@@ -58,12 +58,14 @@ class Gate:
         allowed_logins: set[str],
         allowed_nodes: set[str],
         whois: Callable[[str], Who | None],
+        tailnet: tuple = TAILNET,
     ):
         self.token = proxy_token.encode()
         self.trusted = [ipaddress.ip_network(cidr) for cidr in trusted_proxies]
         self.allowed_logins = {login.lower() for login in allowed_logins}
         self.allowed_nodes = set(allowed_nodes)
         self.whois = whois
+        self.tailnet = tailnet
 
     @property
     def missing(self) -> list[str]:
@@ -77,20 +79,21 @@ class Gate:
             gaps.append("KEEP_ALLOWED_LOGINS or KEEP_ALLOWED_NODES")
         return gaps
 
-    def check(self, peer: str | None, forwarded: str | None, token: str | None) -> Verdict:
-        if self.missing:
-            return Verdict(None, "not_configured")
+    def _client(self, peer: str | None, forwarded: str | None, token: str | None):
+        """The proven client address, or the reason there is none."""
         peer_ip = _ip(peer)
         if peer_ip is None or not any(peer_ip in network for network in self.trusted):
-            return Verdict(None, "untrusted_peer")
+            return None, "untrusted_peer"
         if not hmac.compare_digest((token or "").encode(), self.token):
-            return Verdict(None, "bad_proxy_token")
+            return None, "bad_proxy_token"
         client = _ip(forwarded)
         if client is None:
-            return Verdict(None, "no_client")
-        if not any(client in network for network in TAILNET):
-            return Verdict(None, "not_tailnet")
-        who = self.whois(str(client))
+            return None, "no_client"
+        if not any(client in network for network in self.tailnet):
+            return None, "not_tailnet"
+        return client, "ok"
+
+    def _admit(self, who: Who | None) -> Verdict:
         if who is None:
             return Verdict(None, "unknown_identity")
         if who.node and who.node in self.allowed_nodes:
@@ -100,6 +103,14 @@ class Gate:
         if not who.login or who.login.lower() not in self.allowed_logins:
             return Verdict(None, "not_allowed")
         return Verdict(who.login, "ok")
+
+    def check(self, peer: str | None, forwarded: str | None, token: str | None) -> Verdict:
+        if self.missing:
+            return Verdict(None, "not_configured")
+        client, reason = self._client(peer, forwarded, token)
+        if client is None:
+            return Verdict(None, reason)
+        return self._admit(self.whois(str(client)))
 
 
 class _UnixConnection(http.client.HTTPConnection):
@@ -113,6 +124,17 @@ class _UnixConnection(http.client.HTTPConnection):
         self.sock.connect(self.path_to_socket)
 
 
+def _parse_whois(document: dict) -> Who | None:
+    node = document.get("Node") or {}
+    stable_id = node.get("StableID") or None
+    if node.get("Tags"):
+        return Who(login=None, node=stable_id, tagged=True)
+    login = (document.get("UserProfile") or {}).get("LoginName") or None
+    if login is None and stable_id is None:
+        return None
+    return Who(login=login, node=stable_id)
+
+
 def localapi_whois(socket_path: str) -> Callable[[str], Who | None]:
     """A whois(ip) over tailscaled's LocalAPI socket. Any failure is None."""
 
@@ -124,15 +146,7 @@ def localapi_whois(socket_path: str) -> Callable[[str], Who | None]:
             response = connection.getresponse()
             if response.status != 200:
                 return None
-            body = json.loads(response.read(MAX_WHOIS_BYTES))
-            node = body.get("Node") or {}
-            stable_id = node.get("StableID") or None
-            if node.get("Tags"):
-                return Who(login=None, node=stable_id, tagged=True)
-            login = (body.get("UserProfile") or {}).get("LoginName") or None
-            if login is None and stable_id is None:
-                return None
-            return Who(login=login, node=stable_id)
+            return _parse_whois(json.loads(response.read(MAX_WHOIS_BYTES)))
         except (OSError, ValueError, AttributeError, http.client.HTTPException) as error:
             log.error("whois_failed error=%s", type(error).__name__)
             return None

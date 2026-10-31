@@ -47,13 +47,13 @@ class UnifiCollector:
         self,
         base_url: str | None,
         api_key: str | None,
-        cert_sha256: str | None = None,
+        cert_pem: str | None = None,
         site: str = "default",
         fetch: Fetch = fetch_json,
     ):
         self.base_url = (base_url or "").rstrip("/")
         self.api_key = api_key
-        self.cert_sha256 = cert_sha256 or None
+        self.cert_pem = cert_pem or None
         self.site = site
         self.fetch = fetch
 
@@ -67,7 +67,7 @@ class UnifiCollector:
             self.fetch(
                 f"{self.base_url}/proxy/network/api/s/{site}/{path}",
                 headers={"X-API-KEY": self.api_key, "Accept": "application/json"},
-                pin_sha256=self.cert_sha256,
+                trust_pem=self.cert_pem,
             ),
             what,
         )
