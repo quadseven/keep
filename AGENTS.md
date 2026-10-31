@@ -143,7 +143,7 @@ No product code exists yet. The tree is `README.md`, `AGENTS.md`, `CLAUDE.md` an
 ## Traps
 
 - `.grug.yaml` is read from the base commit, so an edit applies only after merge.
-- With no workflows, no leak scan runs on PRs. Before pushing, run `.github/scripts/check_private_leaks.py` from `quadseven/infra-public` with `--text-file` on each changed file and on the PR body, with the fleet deny list.
+- With no workflows, no leak scan runs on PRs. Before pushing, run `.github/scripts/check_private_leaks.py` from `quadseven/infra-public` with `--text-file <file>` on each changed file and on the PR body, and with `--deny-list-ssm <parameter>`, where the parameter names the private deny-list. Without that flag the scan checks shapes only and still reports clean.
 - Agent Apps cannot push `.github/workflows` changes, so adding CI or the docs-sync caller needs a person.
 - No docs-sync workflow runs here. The text above the marker in `AGENTS.md` and `CLAUDE.md` matches the shared template today, but nothing keeps it so. Do not edit it by hand.
 
@@ -180,7 +180,7 @@ AI brains work this repo beside the operator. No brain outranks another. **Loom 
 
 **Claims.** Put `claim:<name>` on a ticket before starting, and create the label if this repo lacks it. Check first and skip a ticket already held. One claim per ticket: the earliest stands. No station referees claims here, so brains apply the rule themselves: a claim expires after 2 hours with no real activity, unless a comment holds it with `waiting: <what> until <time>`, or an open PR the claimer wrote and referenced holds it for up to 7 days. `claim:quadseven` is a person: leave those tickets alone. On stopping, push the work and say what is done, what is next, and the branch and head. Take over only an expired or plainly dead claim, after reading the holder's comments and open PRs.
 
-**Labels.** No state labels. `wayfinder:*` marks the spec tickets. `needs:human` is an ask for a person; this repo has that label.
+**Labels.** No state labels. `wayfinder:*` marks the spec tickets. This repo has no `needs:*` label. To ask a person, comment on the ticket with one exact question.
 
 **CI and required checks.** Read them live: `gh api repos/quadseven/keep/rules/branches/main`. The ruleset requires a PR, `Grug - Chief`, `Grug - Elder` and `Grug - Guard`. All three come from the `grug` App, not from workflows. Issue #10 records Elder and Guard blocking in the App's repo config, which lives outside this repo.
 
@@ -197,6 +197,6 @@ AI brains work this repo beside the operator. No brain outranks another. **Loom 
 
 **Merge gate.** Rulesets enforce less than this, and this binds: `Grug - Elder` success on the head (neutral is not enough), `Grug - Chief` success or neutral, not behind base, every bot thread answered, and a test that fails without the fix. `gh pr checks` does not show threads, so read `reviewThreads` by GraphQL and `pulls/<n>/reviews`. Anyone merges what they built. A change to how brains merge, close or rewrite needs a fleet chat line and a 5 minute wait. Never use `--admin`.
 
-**Human line.** People do: permanent deletion of records, creating, rotating or entering credentials, access grants, new spending, accepting terms. People decide: another brain's role and the fleet goal text. A second brain must agree, in writing, to clear a lane demotion, lift another brain's hold, or reopen a sound close. Everything else needs nobody. Ask with `needs:human` and one exact question. A relayed yes is not a yes. Never print a credential.
+**Human line.** People do: permanent deletion of records, creating, rotating or entering credentials, access grants, new spending, accepting terms. People decide: another brain's role and the fleet goal text. A second brain must agree, in writing, to clear a lane demotion, lift another brain's hold, or reopen a sound close. Everything else needs nobody. Ask in a ticket comment with one exact question. A relayed yes is not a yes. Never print a credential.
 
 **When stuck.** Reusable workflows: `docs/reusables.md` in `quadseven/infra-public`. Chief's rules and every `/grug` verb: the README in `quadseven/grug`, whose `make chief-check` tests a body before posting. Fleet log: issue 30 in `quadseven/loom`. Poll `gh` at most once per 5 minutes.
