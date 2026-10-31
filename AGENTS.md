@@ -138,11 +138,21 @@ Keep collects inventory, versions, update counts, health and vulnerability data 
 
 ## Current state
 
-No product code exists yet. The tree is `README.md`, `AGENTS.md`, `CLAUDE.md` and `.grug.yaml`. There is no build, test or lint command, no `.github/workflows`, and no `.loom/validation.conf`. Issue #1 is the open map toward a buildable spec; issues #2 to #9 hold the closed decisions. Read them before proposing a design. When code lands, add its exact commands here in the same PR.
+The walking skeleton from #14: a FastAPI app under `src/keep/` that reads Action1 and UniFi and shows one worst-first page behind Tailscale identity. Readings live in memory. Postgres, scheduled Jobs, antivirus and the other sources are not built yet. Issue #1 is the open map toward the full spec; issues #2 to #9 hold the closed decisions. Read them before proposing a design.
+
+## Commands
+
+- Install: `uv sync`
+- Test: `uv run pytest`
+- Lint: `uv run ruff check . && uv run ruff format --check .`
+- Refresh the deployed lock after any dependency change: `uv export --no-dev --no-emit-project --format requirements-txt --python 3.13 -o requirements.txt`
+- Run: `PYTHONPATH=src uv run uvicorn --factory keep.web:from_env --port 8080 --no-access-log --no-proxy-headers`
 
 ## Traps
 
 - `.grug.yaml` is read from the base commit, so an edit applies only after merge.
+- Every external call goes through `keep.net.fetch_json`, which holds the timeouts, the TLS rules and the fixed failure reasons. A collector never opens its own connection.
+- `requirements.txt` is what a deployment installs, by hash. Change it with `pyproject.toml`, in the same PR.
 - With no workflows, no leak scan runs on PRs. Before pushing, run `.github/scripts/check_private_leaks.py` from `quadseven/infra-public` with `--text-file <file>` on each changed file and on the PR body, and with `--deny-list-ssm <parameter>`, where the parameter names the private deny-list. Without that flag the scan checks shapes only and still reports clean.
 - Agent Apps cannot push `.github/workflows` changes, so adding CI or the docs-sync caller needs a person.
 - No docs-sync workflow runs here. The text above the marker in `AGENTS.md` and `CLAUDE.md` matches the shared template today, but nothing keeps it so. Do not edit it by hand.
