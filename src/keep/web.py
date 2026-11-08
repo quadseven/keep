@@ -7,8 +7,9 @@ import os
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
+from keep import api
 from keep.collectors.action1 import Action1Collector
 from keep.collectors.unifi import UnifiCollector
 from keep.identity import Gate, localapi_whois
@@ -45,15 +46,38 @@ def create_app(gate: Gate, runner: Runner) -> FastAPI:
         alive = runner.thread.is_alive()
         return PlainTextResponse("ok" if alive else "collector stopped", 200 if alive else 503)
 
-    @app.get("/", response_class=HTMLResponse)
-    def index(request: Request) -> HTMLResponse:
-        now = datetime.now(UTC)
-        records, failures = runner.snapshot()
-        verdict = gate.check(
+    def who(request: Request):
+        return gate.check(
             request.client.host if request.client else None,
             request.headers.get("x-forwarded-for"),
             request.headers.get("x-keep-proxy-token"),
         )
+
+    def refused(reason: str) -> JSONResponse:
+        log.info("refused reason=%s", reason)
+        return JSONResponse({"error": "not allowed", "reason": reason}, 403)
+
+    @app.get("/api/v1/devices")
+    def api_devices(request: Request) -> JSONResponse:
+        verdict = who(request)
+        if verdict.identity is None:
+            return refused(verdict.reason)
+        records, _ = runner.snapshot()
+        return JSONResponse(api.devices(build(records, datetime.now(UTC))))
+
+    @app.get("/api/v1/sources")
+    def api_sources(request: Request) -> JSONResponse:
+        verdict = who(request)
+        if verdict.identity is None:
+            return refused(verdict.reason)
+        records, _ = runner.snapshot()
+        return JSONResponse(api.sources(records))
+
+    @app.get("/", response_class=HTMLResponse)
+    def index(request: Request) -> HTMLResponse:
+        now = datetime.now(UTC)
+        records, failures = runner.snapshot()
+        verdict = who(request)
         if verdict.identity is None:
             log.info("refused reason=%s", verdict.reason)
             return HTMLResponse(locked_page(verdict.reason, gate.missing, records, now), 403)
