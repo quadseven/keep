@@ -9,6 +9,7 @@ Keep is read-only. It reads each source's API, joins the records into devices, a
 - Action1: managed endpoints, missing updates, vulnerability counts, reboot state, online state.
 - UniFi Network, local console API: adopted network devices with firmware state, and connected clients.
 - One page with a source status panel, a worst-first list, and folded lists for unknown, healthy and network-only devices.
+- A read-only JSON API for agents: `GET /api/v1/devices` and `GET /api/v1/sources`.
 - Sign-in by Tailscale identity.
 
 Readings live in memory, so a restart clears them until the next collection. Postgres, history, scheduled Jobs, antivirus and the other planned sources are not built yet.
@@ -27,6 +28,15 @@ PYTHONPATH=src uv run uvicorn --factory keep.web:from_env --port 8080 --no-acces
 ```
 
 A deployment installs `requirements.txt`, which pins every dependency by hash. `/livez` and `/readyz` need no sign-in.
+
+## JSON API
+
+Both routes take the same sign-in as the page and answer 403 with a reason to anyone the page refuses. Neither has a write verb.
+
+- `GET /api/v1/devices`: every device in page order (needs attention worst first, then unknown, healthy, and network-only clients). Each has a `status`, its findings, what is unknown about it, and the raw reading from each source.
+- `GET /api/v1/sources`: each source's state and reason, matching the page's source panel.
+
+An unknown count is `null`, never `0`, and a device read only from a failed source is never `healthy`.
 
 ## Sign-in
 
