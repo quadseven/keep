@@ -5,7 +5,12 @@ from __future__ import annotations
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, field
+from datetime import datetime
+from itertools import chain
 from pathlib import Path
+
+from keep.inventory import View, build
+from keep.model import Kind, Observation, SourceRecord, SourceState
 
 CONTROLS = (
     ("equifax_freeze", "Equifax credit freeze"),
@@ -36,10 +41,31 @@ class Control:
 
 
 @dataclass(frozen=True)
+class DeviceReading:
+    source: str
+    source_state: SourceState
+    kind: Kind
+    observed_at: datetime
+    updates_critical: int | None
+    updates_other: int | None
+    firmware_pending: bool | None
+
+
+@dataclass(frozen=True)
+class DeviceSecurity:
+    name: str
+    readings: list[DeviceReading] = field(default_factory=list)
+    # Neither collector currently reports these signals.
+    av_status: str | None = None
+    os_support: str | None = None
+
+
+@dataclass(frozen=True)
 class Person:
     name: str
     breach: Breach
     controls: list[Control]
+    devices: list[DeviceSecurity]
 
 
 @dataclass(frozen=True)
@@ -48,7 +74,41 @@ class Security:
     people: list[Person] = field(default_factory=list)
 
 
-def _person(row: sqlite3.Row, saved: dict[str, tuple[str, str | None]]) -> Person:
+type DeviceKey = tuple[str, str]
+
+
+def _reading(observation: Observation, state: SourceState) -> DeviceReading:
+    patches = state is SourceState.OK and observation.kind is Kind.COMPUTER
+    firmware = state is SourceState.OK and observation.kind is Kind.NETWORK_DEVICE
+    return DeviceReading(
+        source=observation.source,
+        source_state=state,
+        kind=observation.kind,
+        observed_at=observation.observed_at,
+        updates_critical=observation.updates_critical if patches else None,
+        updates_other=observation.updates_other if patches else None,
+        firmware_pending=observation.firmware_pending if firmware else None,
+    )
+
+
+def _devices(
+    owners: dict[DeviceKey, str], view: View, states: dict[str, SourceState]
+) -> list[DeviceSecurity]:
+    result: list[DeviceSecurity] = []
+    seen: set[DeviceKey] = set()
+    for device in chain(view.attention, view.unknown, view.healthy, view.clients):
+        matched = {(item.source, item.ref) for item in device.observations} & owners.keys()
+        if matched:
+            seen.update(matched)
+            readings = [_reading(item, states[item.source]) for item in device.observations]
+            result.append(DeviceSecurity(device.name, readings))
+    result.extend(DeviceSecurity(label) for key, label in owners.items() if key not in seen)
+    return result
+
+
+def _person(
+    row: sqlite3.Row, saved: dict[str, tuple[str, str | None]], devices: list[DeviceSecurity]
+) -> Person:
     passwords = row["passwords_involved"]
     return Person(
         name=row["name"],
@@ -61,13 +121,16 @@ def _person(row: sqlite3.Row, saved: dict[str, tuple[str, str | None]]) -> Perso
         controls=[
             Control(key, label, *saved.get(key, ("unknown", None))) for key, label in CONTROLS
         ],
+        devices=devices,
     )
 
 
-def load(path: Path | None) -> Security:
+def load(path: Path | None, records: list[SourceRecord], now: datetime) -> Security:
     if path is None:
         return Security(configured=False)
 
+    view = build(records, now)
+    states = {record.name: record.state for record in records}
     with closing(sqlite3.connect(f"{path.absolute().as_uri()}?mode=ro", uri=True)) as db:
         db.row_factory = sqlite3.Row
         db.execute("BEGIN")
@@ -77,8 +140,16 @@ def load(path: Path | None) -> Security:
                 row["status"],
                 row["checked_on"],
             )
+        owners: dict[int, dict[DeviceKey, str]] = {}
+        for row in db.execute("""
+            SELECT person_id, source, source_ref, label FROM device_owners
+            ORDER BY label, source, source_ref
+        """):
+            owners.setdefault(row["person_id"], {})[row["source"], row["source_ref"]] = row["label"]
         people = [
-            _person(row, saved.get(row["id"], {}))
+            _person(
+                row, saved.get(row["id"], {}), _devices(owners.get(row["id"], {}), view, states)
+            )
             for row in db.execute("""
                 SELECT id, name, breach_count, latest_breach_on, passwords_involved,
                        breach_checked_on FROM people ORDER BY id

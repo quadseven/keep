@@ -7,7 +7,7 @@ from html import escape
 
 from keep.inventory import Device, Severity, View
 from keep.model import Kind, SourceFailure, SourceRecord, SourceState
-from keep.security import Control, Person, Security
+from keep.security import Control, DeviceReading, DeviceSecurity, Person, Security
 
 SEVERITY_LABELS = {
     Severity.CRITICAL: "critical",
@@ -170,6 +170,35 @@ def _control(control: Control) -> str:
     return f"<li>{escape(control.label)}: {escape(control.status.capitalize())} ({checked})</li>"
 
 
+def _device_reading(reading: DeviceReading) -> str:
+    source = escape(reading.source)
+    state = escape(reading.source_state.value)
+    observed = reading.observed_at.isoformat()
+    parts = [f'<li><span class="meta">{source} ({state}), read {observed}</span><ul>']
+    if reading.kind is Kind.COMPUTER:
+        parts.extend(
+            (
+                f"<li>Critical patches pending: {_known(reading.updates_critical)}</li>",
+                f"<li>Other patches pending: {_known(reading.updates_other)}</li>",
+            )
+        )
+    elif reading.kind is Kind.NETWORK_DEVICE:
+        parts.append(f"<li>Firmware update pending: {_known(reading.firmware_pending)}</li>")
+    else:
+        parts.append("<li>Patch status: Unknown</li>")
+    return "".join(parts) + "</ul></li>"
+
+
+def _device_security(device: DeviceSecurity) -> str:
+    readings = "".join(_device_reading(reading) for reading in device.readings)
+    return (
+        f'<li><span class="name">{escape(device.name)}</span><ul>'
+        f"{readings or '<li>No device reading available.</li>'}"
+        f"<li>Antivirus: {_known(device.av_status)}</li>"
+        f"<li>OS support: {_known(device.os_support)}</li></ul></li>"
+    )
+
+
 def _posture(person: Person) -> str:
     breach = person.breach
     latest = "None reported" if breach.count == 0 else _known(breach.latest_breach_on)
@@ -182,7 +211,13 @@ def _posture(person: Person) -> str:
         f"<li>Last checked: {_known(breach.checked_on)}</li></ul>"
         "<h3>Protective controls</h3><ul>"
         + "".join(_control(control) for control in person.controls)
-        + "</ul></article>"
+        + "</ul><h3>Device security, worst first</h3>"
+        + (
+            "<ul>" + "".join(_device_security(device) for device in person.devices) + "</ul>"
+            if person.devices
+            else '<p class="sub">No devices linked.</p>'
+        )
+        + "</article>"
     )
 
 

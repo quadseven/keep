@@ -24,4 +24,12 @@ CREATE TABLE controls (
     PRIMARY KEY (person_id, control)
 ) STRICT;
 
+CREATE TABLE device_owners (
+    person_id INTEGER NOT NULL REFERENCES people(id),
+    source TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    label TEXT NOT NULL CHECK (length(trim(label)) > 0),
+    PRIMARY KEY (person_id, source, source_ref)
+) STRICT;
+
 COMMIT;

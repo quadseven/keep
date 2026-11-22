@@ -4,7 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from test_web import HEADERS, client
+from fixtures import mac
+from keep.model import Kind, SourceRecord, SourceState
+from test_web import HEADERS, NOW, client, obs, ok_record
 
 SCHEMA = Path(__file__).resolve().parents[1] / "src/keep/security.sql"
 
@@ -65,6 +67,7 @@ def test_security_shows_dated_verified_posture_and_unknowns(security_db):
     assert adult["controls"][0]["checked_on"] == "2026-01-03"
     assert adult["controls"][1]["status"] == "unknown"
     assert adult["controls"][1]["checked_on"] is None
+    assert adult["devices"] == []
 
     page = web.get("/security", headers=HEADERS)
     assert page.status_code == 200 and page.headers["cache-control"] == "no-store"
@@ -95,3 +98,88 @@ def test_a_claimed_control_or_breach_status_requires_a_valid_date(security_db):
             db.execute("UPDATE people SET breach_count = 0 WHERE id = 2")
         with pytest.raises(sqlite3.IntegrityError):
             db.execute("UPDATE controls SET checked_on = '2026-02-30'")
+
+
+def test_devices_reuse_worst_first_inventory_and_show_current_signals(security_db):
+    with closing(sqlite3.connect(security_db)) as db:
+        db.executescript("""
+            INSERT INTO device_owners (person_id, source, source_ref, label) VALUES
+                (1, 'Action1', 'TEST-ENDPOINT-1', 'TEST-LABEL-1'),
+                (1, 'UniFi', '00:00:5e:00:53:01', 'TEST-LABEL-1'),
+                (1, 'UniFi', '00:00:5e:00:53:02', 'TEST-LABEL-2'),
+                (1, 'Action1', 'TEST-ENDPOINT-4', 'TEST-UNREAD'),
+                (2, 'Action1', 'TEST-ENDPOINT-3', 'TEST-LABEL-3');
+        """)
+    worst = obs(
+        "TEST-WORST <i>",
+        ref="TEST-ENDPOINT-1",
+        macs=(mac(1),),
+        updates_critical=4,
+        updates_other=None,
+    )
+    other = obs("TEST-OTHER", ref="TEST-ENDPOINT-3", vulns_critical=0)
+    network = SourceRecord(
+        "UniFi",
+        SourceState.OK,
+        observations=[
+            obs("TEST-JOINED", source="UniFi", kind=Kind.CLIENT, ref=mac(1), macs=(mac(1),)),
+            obs(
+                "TEST-SWITCH",
+                source="UniFi",
+                kind=Kind.NETWORK_DEVICE,
+                ref=mac(2),
+                macs=(mac(2),),
+                firmware_pending=True,
+                vulns_critical=None,
+            ),
+        ],
+    )
+    web = client([network, ok_record(other, worst)], security_db=security_db)
+    adult, second = web.get("/api/v1/security", headers=HEADERS).json()["people"]
+    assert [item["name"] for item in adult["devices"]] == [
+        "TEST-WORST <i>",
+        "TEST-SWITCH",
+        "TEST-UNREAD",
+    ]
+    assert [item["name"] for item in second["devices"]] == ["TEST-OTHER"]
+    device = adult["devices"][0]
+    assert device["av_status"] is None and device["os_support"] is None
+    readings = {item["source"]: item for item in device["readings"]}
+    assert readings["Action1"]["updates_critical"] == 4
+    assert readings["Action1"]["updates_other"] is None
+    assert readings["Action1"]["observed_at"] == NOW.isoformat()
+    assert adult["devices"][1]["readings"][0]["firmware_pending"] is True
+    assert adult["devices"][2]["readings"] == []
+    page = web.get("/security", headers=HEADERS).text
+    assert (
+        page.index("TEST-WORST &lt;i&gt;") < page.index("TEST-SWITCH") < page.index("TEST-UNREAD")
+    )
+    assert "Critical patches pending: 4" in page
+    assert "Other patches pending: Unknown" in page
+    assert "Firmware update pending: Yes" in page
+    assert "Antivirus: Unknown" in page and "OS support: Unknown" in page
+    assert "No device reading available" in page
+
+
+def test_failed_source_never_reports_old_patch_or_firmware_values_as_current(security_db):
+    with closing(sqlite3.connect(security_db)) as db:
+        db.executescript("""
+            INSERT INTO device_owners (person_id, source, source_ref, label) VALUES
+                (1, 'Action1', 'TEST-ENDPOINT', 'TEST-STALE');
+        """)
+    stale = SourceRecord(
+        "Action1",
+        SourceState.FAILED,
+        reason="timed out",
+        last_success=NOW,
+        observations=[obs("TEST-STALE", ref="TEST-ENDPOINT", updates_critical=0, updates_other=5)],
+    )
+    web = client([stale], security_db=security_db)
+    reading = web.get("/api/v1/security", headers=HEADERS).json()["people"][0]["devices"][0][
+        "readings"
+    ][0]
+    assert reading["source_state"] == "failed"
+    assert reading["updates_critical"] is None and reading["updates_other"] is None
+    page = web.get("/security", headers=HEADERS).text
+    assert "Critical patches pending: Unknown" in page
+    assert "Action1 (failed)" in page

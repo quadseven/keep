@@ -61,8 +61,9 @@ def create_app(gate: Gate, runner: Runner, *, security_db: Path | None = None) -
         return JSONResponse({"error": "not allowed", "reason": reason}, 403)
 
     def security_data() -> security.Security | None:
+        records, _ = runner.snapshot()
         try:
-            return security.load(security_db)
+            return security.load(security_db, records, datetime.now(UTC))
         except sqlite3.Error:
             log.warning("Security database unavailable")
             return None

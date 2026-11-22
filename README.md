@@ -42,13 +42,15 @@ sqlite3 "$KEEP_SECURITY_DB" < src/keep/security.sql
 
 Use a local database editor with foreign keys enabled (`PRAGMA foreign_keys = ON`) to add enrolled people and record verifications. The `people` table holds a display name and the latest breach review. In `controls`, use the person ID and one of `equifax_freeze`, `experian_freeze`, `transunion_freeze`, `irs_ip_pin`, `ssa_lock`, `e_verify_self_lock`, `email_mfa`, or `watchtower_review`. Status is `in place`, `missing`, or `unknown`, and known statuses require a check date in `YYYY-MM-DD` format. Leave unverified values empty. Keep personal details in the database and omit credentials.
 
+Link existing devices to a person in `device_owners`. Set `source` to `Action1` and `source_ref` to the endpoint ID, or use `UniFi` and the lowercase MAC address with colon separators. Use `label` to identify the device when there is no matching reading. The roll-up uses the inventory page's worst-first order and shows patch and firmware status from current readings. Antivirus and OS support are unknown because the existing collectors do not report them.
+
 ## JSON API
 
 All routes take the same sign-in as the page and answer 403 with a reason to anyone the page refuses. The API is read-only.
 
 - `GET /api/v1/devices`: every device in page order (needs attention worst first, then unknown, healthy, and network-only clients). Each has a `status`, its findings, what is unknown about it, and the raw reading from each source.
 - `GET /api/v1/sources`: each source's state and reason, matching the page's source panel.
-- `GET /api/v1/security`: the Security page's per-person breach summary and dated protective controls. Missing counts and dates are `null`.
+- `GET /api/v1/security`: the Security page's per-person breach summary, dated protective controls, and device roll-up. Unknown readings, counts, and dates are `null`.
 
 An unknown count is `null`, never `0`, and a device read only from a failed source is never `healthy`.
 
