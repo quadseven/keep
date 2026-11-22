@@ -7,6 +7,7 @@ from html import escape
 
 from keep.inventory import Device, Severity, View
 from keep.model import Kind, SourceFailure, SourceRecord, SourceState
+from keep.security import Control, Person, Security
 
 SEVERITY_LABELS = {
     Severity.CRITICAL: "critical",
@@ -19,7 +20,7 @@ NOT_COLLECTED = (
     "Not collected yet: antivirus, Proxmox, Kubernetes, SSH hosts, image SBOM matching. "
     "A device here has been checked only for what its listed sources report."
 )
-MEMORY_NOTE = "Readings live in memory until the database slice ships, so a restart clears them."
+MEMORY_NOTE = "Device readings live in memory, so a restart clears them."
 
 CSS = """
 :root{color-scheme:light dark;--bg:#f6f5f2;--panel:#fff;--ink:#1d1f21;--mute:#62676d;--line:#dfddd7;
@@ -128,6 +129,7 @@ def inventory_page(
     parts = [
         "<h1>Keep</h1>",
         f'<div class="sub">Signed in as {escape(identity)}</div>',
+        '<p><a href="/security">Security</a></p>',
         _sources(records, now),
         "<h2>Needs attention, worst first</h2>",
     ]
@@ -151,6 +153,48 @@ def inventory_page(
         )
     parts.append(f'<p class="note">{escape(NOT_COLLECTED)} {escape(MEMORY_NOTE)}</p>')
     return _shell("".join(parts))
+
+
+def _known(value: str | int | bool | None) -> str:
+    if value is None:
+        return "Unknown"
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    return escape(str(value))
+
+
+def _control(control: Control) -> str:
+    checked = (
+        f"checked {escape(control.checked_on)}" if control.checked_on else "check date unknown"
+    )
+    return f"<li>{escape(control.label)}: {escape(control.status.capitalize())} ({checked})</li>"
+
+
+def _posture(person: Person) -> str:
+    breach = person.breach
+    latest = "None reported" if breach.count == 0 else _known(breach.latest_breach_on)
+    return (
+        f'<article class="dev"><h2>{escape(person.name)}</h2>'
+        "<h3>Breach exposure</h3><ul>"
+        f"<li>Breach count: {_known(breach.count)}</li>"
+        f"<li>Most recent breach: {latest}</li>"
+        f"<li>Passwords involved: {_known(breach.passwords_involved)}</li>"
+        f"<li>Last checked: {_known(breach.checked_on)}</li></ul>"
+        "<h3>Protective controls</h3><ul>"
+        + "".join(_control(control) for control in person.controls)
+        + "</ul></article>"
+    )
+
+
+def security_page(data: Security | None) -> str:
+    header = '<p><a href="/">Devices</a></p><h1>Security</h1>'
+    if data is None:
+        return _shell(header + '<p class="locked">Security database unavailable.</p>')
+    if not data.configured:
+        return _shell(header + '<p class="sub">Security database is not configured.</p>')
+    if not data.people:
+        return _shell(header + '<p class="sub">No people recorded.</p>')
+    return _shell(header + "".join(_posture(person) for person in data.people))
 
 
 def locked_page(reason: str, missing: list[str], records: list[SourceRecord], now: datetime) -> str:

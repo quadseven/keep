@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-from keep import api
+from keep import api, security
 from keep.collectors.action1 import Action1Collector
 from keep.collectors.unifi import UnifiCollector
 from keep.identity import Gate, localapi_whois
 from keep.inventory import build
-from keep.page import inventory_page, locked_page
+from keep.page import inventory_page, locked_page, security_page
 from keep.runner import Runner
 
 log = logging.getLogger("keep.web")
@@ -28,7 +31,7 @@ SECURITY_HEADERS = {
 }
 
 
-def create_app(gate: Gate, runner: Runner) -> FastAPI:
+def create_app(gate: Gate, runner: Runner, *, security_db: Path | None = None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware("http")
@@ -57,6 +60,13 @@ def create_app(gate: Gate, runner: Runner) -> FastAPI:
         log.info("refused reason=%s", reason)
         return JSONResponse({"error": "not allowed", "reason": reason}, 403)
 
+    def security_data() -> security.Security | None:
+        try:
+            return security.load(security_db)
+        except sqlite3.Error:
+            log.warning("Security database unavailable")
+            return None
+
     @app.get("/api/v1/devices")
     def api_devices(request: Request) -> JSONResponse:
         verdict = who(request)
@@ -72,6 +82,27 @@ def create_app(gate: Gate, runner: Runner) -> FastAPI:
             return refused(verdict.reason)
         records, _ = runner.snapshot()
         return JSONResponse(api.sources(records))
+
+    @app.get("/api/v1/security")
+    def api_security(request: Request) -> JSONResponse:
+        verdict = who(request)
+        if verdict.identity is None:
+            return refused(verdict.reason)
+        data = security_data()
+        if data is None:
+            return JSONResponse({"error": "Security database unavailable"}, 503)
+        return JSONResponse(jsonable_encoder(data))
+
+    @app.get("/security", response_class=HTMLResponse)
+    def security_index(request: Request) -> HTMLResponse:
+        verdict = who(request)
+        if verdict.identity is None:
+            log.info("refused reason=%s", verdict.reason)
+            return HTMLResponse(
+                locked_page(verdict.reason, gate.missing, [], datetime.now(UTC)), 403
+            )
+        data = security_data()
+        return HTMLResponse(security_page(data), 503 if data is None else 200)
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request) -> HTMLResponse:
@@ -118,4 +149,5 @@ def from_env() -> FastAPI:
     interval = float(env("KEEP_COLLECT_INTERVAL_SECONDS") or DEFAULT_INTERVAL_SECONDS)
     runner = Runner(collectors, interval)
     runner.start()
-    return create_app(gate, runner)
+    security_path = env("KEEP_SECURITY_DB")
+    return create_app(gate, runner, security_db=Path(security_path) if security_path else None)

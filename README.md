@@ -12,7 +12,7 @@ Keep is read-only. It reads each source's API, joins the records into devices, a
 - A read-only JSON API for agents: `GET /api/v1/devices` and `GET /api/v1/sources`.
 - Sign-in by Tailscale identity.
 
-Readings live in memory, so a restart clears them until the next collection. Postgres, history, scheduled Jobs, antivirus and the other planned sources are not built yet.
+Device readings live in memory, so a restart clears them until the next collection. Postgres, device history, scheduled Jobs, antivirus and the other planned sources are not built yet.
 
 ## How missing data shows up
 
@@ -29,12 +29,26 @@ PYTHONPATH=src uv run uvicorn --factory keep.web:from_env --port 8080 --no-acces
 
 A deployment installs `requirements.txt`, which pins every dependency by hash. `/livez` and `/readyz` need no sign-in.
 
+## Security
+
+The Security page shows operator-verified breach exposure and protective controls for each enrolled person. Keep reads them from a separate SQLite database. If `KEEP_SECURITY_DB` is unset, the section shows that it is unconfigured.
+
+Choose a database path in a private directory outside the checkout, then initialize the database once and point `KEEP_SECURITY_DB` at it:
+
+```sh
+umask 077
+sqlite3 "$KEEP_SECURITY_DB" < src/keep/security.sql
+```
+
+Use a local database editor with foreign keys enabled (`PRAGMA foreign_keys = ON`) to add enrolled people and record verifications. The `people` table holds a display name and the latest breach review. In `controls`, use the person ID and one of `equifax_freeze`, `experian_freeze`, `transunion_freeze`, `irs_ip_pin`, `ssa_lock`, `e_verify_self_lock`, `email_mfa`, or `watchtower_review`. Status is `in place`, `missing`, or `unknown`, and known statuses require a check date in `YYYY-MM-DD` format. Leave unverified values empty. Keep personal details in the database and omit credentials.
+
 ## JSON API
 
-Both routes take the same sign-in as the page and answer 403 with a reason to anyone the page refuses. Neither has a write verb.
+All routes take the same sign-in as the page and answer 403 with a reason to anyone the page refuses. The API is read-only.
 
 - `GET /api/v1/devices`: every device in page order (needs attention worst first, then unknown, healthy, and network-only clients). Each has a `status`, its findings, what is unknown about it, and the raw reading from each source.
 - `GET /api/v1/sources`: each source's state and reason, matching the page's source panel.
+- `GET /api/v1/security`: the Security page's per-person breach summary and dated protective controls. Missing counts and dates are `null`.
 
 An unknown count is `null`, never `0`, and a device read only from a failed source is never `healthy`.
 
