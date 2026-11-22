@@ -39,11 +39,16 @@ def test_security_is_linked_and_read_only():
         assert web.post(path, headers=HEADERS).status_code == 405
 
 
-def test_security_shows_dated_verified_posture_and_unknowns(security_db):
-    web = client([], security_db=security_db)
-    response = web.get("/api/v1/security", headers=HEADERS)
+@pytest.mark.parametrize("path", ["/security", "/api/v1/security"])
+def test_security_responses_are_not_cached(security_db, path):
+    response = client([], security_db=security_db).get(path, headers=HEADERS)
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_security_api_shows_dated_verified_posture_and_unknowns(security_db):
+    web = client([], security_db=security_db)
+    response = web.get("/api/v1/security", headers=HEADERS)
     payload = response.json()
     assert payload["configured"] is True
     adult, second = payload["people"]
@@ -65,21 +70,22 @@ def test_security_shows_dated_verified_posture_and_unknowns(security_db):
         "Primary email passkey or 2FA",
         "Password manager Watchtower review",
     ]
-    assert adult["controls"][0]["status"] == "in place"
-    assert adult["controls"][0]["checked_on"] == "2026-01-03"
-    assert adult["controls"][1]["status"] == "unknown"
-    assert adult["controls"][1]["checked_on"] is None
+    assert [(control["status"], control["checked_on"]) for control in adult["controls"][:2]] == [
+        ("in place", "2026-01-03"),
+        ("unknown", None),
+    ]
     assert adult["devices"] == []
 
-    page = web.get("/security", headers=HEADERS)
-    assert page.status_code == 200 and page.headers["cache-control"] == "no-store"
-    assert "TEST-ADULT &lt;b&gt;" in page.text and "TEST-ADULT <b>" not in page.text
-    assert "TEST-SECOND" in page.text
-    assert "Breach count: 2" in page.text and "Passwords involved: Yes" in page.text
-    assert "Last checked: 2026-01-02" in page.text
-    assert "Equifax credit freeze: In place (checked 2026-01-03)" in page.text
-    assert "Experian credit freeze: Unknown (check date unknown)" in page.text
-    assert "Breach count: Unknown" in page.text
+
+def test_security_page_shows_dated_verified_posture_and_unknowns(security_db):
+    page = client([], security_db=security_db).get("/security", headers=HEADERS).text
+    assert "TEST-ADULT &lt;b&gt;" in page and "TEST-ADULT <b>" not in page
+    assert "TEST-SECOND" in page
+    assert "Breach count: 2" in page and "Passwords involved: Yes" in page
+    assert "Last checked: 2026-01-02" in page
+    assert "Equifax credit freeze: In place (checked 2026-01-03)" in page
+    assert "Experian credit freeze: Unknown (check date unknown)" in page
+    assert "Breach count: Unknown" in page
 
 
 def test_breach_summary_names_the_latest_notice_and_preserves_confirmed_zero(security_db):
@@ -119,7 +125,8 @@ def test_a_claimed_control_or_breach_status_requires_a_valid_date(security_db):
             db.execute("UPDATE controls SET checked_on = '2026-02-30'")
 
 
-def test_devices_reuse_worst_first_inventory_and_show_current_signals(security_db):
+@pytest.fixture
+def security_with_devices(security_db):
     with closing(sqlite3.connect(security_db)) as db:
         db.executescript("""
             INSERT INTO device_owners (person_id, source, source_ref, label) VALUES
@@ -153,14 +160,21 @@ def test_devices_reuse_worst_first_inventory_and_show_current_signals(security_d
             ),
         ],
     )
-    web = client([network, ok_record(other, worst)], security_db=security_db)
-    adult, second = web.get("/api/v1/security", headers=HEADERS).json()["people"]
+    return client([network, ok_record(other, worst)], security_db=security_db)
+
+
+def test_security_api_groups_devices_by_owner_in_worst_first_order(security_with_devices):
+    adult, second = security_with_devices.get("/api/v1/security", headers=HEADERS).json()["people"]
     assert [item["name"] for item in adult["devices"]] == [
         "TEST-WORST <i>",
         "TEST-SWITCH",
         "TEST-UNREAD",
     ]
     assert [item["name"] for item in second["devices"]] == ["TEST-OTHER"]
+
+
+def test_security_api_shows_current_device_readings(security_with_devices):
+    adult, _ = security_with_devices.get("/api/v1/security", headers=HEADERS).json()["people"]
     device = adult["devices"][0]
     assert device["av_status"] is None and device["os_support"] is None
     readings = {item["source"]: item for item in device["readings"]}
@@ -169,7 +183,10 @@ def test_devices_reuse_worst_first_inventory_and_show_current_signals(security_d
     assert readings["Action1"]["observed_at"] == NOW.isoformat()
     assert adult["devices"][1]["readings"][0]["firmware_pending"] is True
     assert adult["devices"][2]["readings"] == []
-    page = web.get("/security", headers=HEADERS).text
+
+
+def test_security_page_shows_device_readings_in_worst_first_order(security_with_devices):
+    page = security_with_devices.get("/security", headers=HEADERS).text
     assert (
         page.index("TEST-WORST &lt;i&gt;") < page.index("TEST-SWITCH") < page.index("TEST-UNREAD")
     )
@@ -204,7 +221,8 @@ def test_failed_source_never_reports_old_patch_or_firmware_values_as_current(sec
     assert "Action1 (failed)" in page
 
 
-def test_incident_feed_matches_services_and_keeps_dated_states(security_db):
+@pytest.fixture
+def security_with_incidents(security_db):
     with closing(sqlite3.connect(security_db)) as db:
         db.executescript("""
             PRAGMA foreign_keys = ON;
@@ -224,7 +242,11 @@ def test_incident_feed_matches_services_and_keeps_dated_states(security_db):
                 (5, 'breach', NULL, 2, 'TEST-OTHER-BREACH', 'low', 'Review notice',
                  '2026-02-01', 'dismissed', '2026-02-02');
         """)
-    web = client([], security_db=security_db)
+    return security_db
+
+
+def test_incident_feed_matches_services_and_keeps_dated_states(security_with_incidents):
+    web = client([], security_db=security_with_incidents)
     feed = web.get("/api/v1/security", headers=HEADERS).json()["incidents"]
     assert [item["title"] for item in feed] == [
         "TEST-VENDOR",
@@ -248,6 +270,10 @@ def test_incident_feed_matches_services_and_keeps_dated_states(security_db):
     assert feed[1]["state"] == "done" and feed[1]["state_checked_on"] == "2026-02-03"
     assert feed[2]["state"] == "dismissed"
     assert feed[3]["service"] is None and feed[3]["affected_people"] == ["TEST-SECOND"]
+
+
+def test_security_page_shows_matching_incidents_and_dated_states(security_with_incidents):
+    web = client([], security_db=security_with_incidents)
     page = web.get("/security", headers=HEADERS).text
     assert "TEST-VENDOR" in page and "Action: Update &lt;version&gt;" in page
     assert "TEST-UNMATCHED" not in page
@@ -255,7 +281,12 @@ def test_incident_feed_matches_services_and_keeps_dated_states(security_db):
     assert "State: Done (checked 2026-02-03)" in page
     assert "State: Dismissed (checked 2026-02-03)" in page
 
-    with closing(sqlite3.connect(security_db)) as db, db:
+
+def test_incident_feed_reads_updated_state_from_database(security_with_incidents):
+    web = client([], security_db=security_with_incidents)
+    feed = web.get("/api/v1/security", headers=HEADERS).json()["incidents"]
+    assert feed[0]["state"] == "open"
+    with closing(sqlite3.connect(security_with_incidents)) as db, db:
         db.execute(
             "UPDATE incidents SET state = 'done', state_checked_on = '2026-02-04' WHERE id=1"
         )
@@ -264,7 +295,8 @@ def test_incident_feed_matches_services_and_keeps_dated_states(security_db):
     assert vendor["state"] == "done" and vendor["state_checked_on"] == "2026-02-04"
 
 
-def test_custodial_account_controls_show_verified_and_unknown_states(security_db):
+@pytest.fixture
+def security_with_custodial_accounts(security_db):
     with closing(sqlite3.connect(security_db)) as db:
         db.executescript("""
             PRAGMA foreign_keys = ON;
@@ -277,12 +309,21 @@ def test_custodial_account_controls_show_verified_and_unknown_states(security_db
                 (1, 1, 'in place', '2026-01-04', 'not offered', '2026-01-05');
             INSERT INTO crypto_accounts (person_id, service_id) VALUES (2, 2);
         """)
+    return security_db
+
+
+def test_claimed_withdrawal_controls_require_a_check_date(security_with_custodial_accounts):
+    with closing(sqlite3.connect(security_with_custodial_accounts)) as db:
         with pytest.raises(sqlite3.IntegrityError):
             db.execute(
                 "UPDATE crypto_accounts SET withdrawal_status = 'in place' WHERE person_id=2"
             )
 
-    web = client([], security_db=security_db)
+
+def test_custodial_account_controls_show_verified_and_unknown_states(
+    security_with_custodial_accounts,
+):
+    web = client([], security_db=security_with_custodial_accounts)
     adult, second = web.get("/api/v1/security", headers=HEADERS).json()["people"]
     assert [account["service"] for account in adult["crypto_accounts"]] == ["TEST-CUSTODY <b>"]
     assert adult["crypto_accounts"][0]["controls"] == [
@@ -300,6 +341,10 @@ def test_custodial_account_controls_show_verified_and_unknown_states(security_db
         ("unknown", None),
         ("unknown", None),
     ]
+
+
+def test_security_page_shows_custodial_control_states(security_with_custodial_accounts):
+    web = client([], security_db=security_with_custodial_accounts)
     page = web.get("/security", headers=HEADERS).text
     assert "TEST-CUSTODY &lt;b&gt;" in page and "TEST-REGULAR" not in page
     assert "Passkey or 2FA: In place (checked 2026-01-04)" in page
