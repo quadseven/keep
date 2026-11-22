@@ -47,12 +47,12 @@ def obs(name="<b>host</b>", **over):
     return Observation(**fields)
 
 
-def client(records, token=TOKEN):
+def client(records, token=TOKEN, *, security_db=None):
     who = Who("operator@example.com", "TEST-NODE-1")
     gate = Gate(
         token, ["127.0.0.1/32"], {"operator@example.com"}, set(), lambda _: who, TEST_TAILNET
     )
-    app = create_app(gate, FakeRunner(records))
+    app = create_app(gate, FakeRunner(records), security_db=security_db)
     return TestClient(app, client=("127.0.0.1", 5000))
 
 

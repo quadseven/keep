@@ -7,6 +7,15 @@ from html import escape
 
 from keep.inventory import Device, Severity, View
 from keep.model import Kind, SourceFailure, SourceRecord, SourceState
+from keep.security import (
+    Control,
+    CryptoAccount,
+    DeviceReading,
+    DeviceSecurity,
+    Incident,
+    Person,
+    Security,
+)
 
 SEVERITY_LABELS = {
     Severity.CRITICAL: "critical",
@@ -19,7 +28,7 @@ NOT_COLLECTED = (
     "Not collected yet: antivirus, Proxmox, Kubernetes, SSH hosts, image SBOM matching. "
     "A device here has been checked only for what its listed sources report."
 )
-MEMORY_NOTE = "Readings live in memory until the database slice ships, so a restart clears them."
+MEMORY_NOTE = "Device readings live in memory, so a restart clears them."
 
 CSS = """
 :root{color-scheme:light dark;--bg:#f6f5f2;--panel:#fff;--ink:#1d1f21;--mute:#62676d;--line:#dfddd7;
@@ -128,6 +137,7 @@ def inventory_page(
     parts = [
         "<h1>Keep</h1>",
         f'<div class="sub">Signed in as {escape(identity)}</div>',
+        '<p><a href="/security">Security</a></p>',
         _sources(records, now),
         "<h2>Needs attention, worst first</h2>",
     ]
@@ -151,6 +161,117 @@ def inventory_page(
         )
     parts.append(f'<p class="note">{escape(NOT_COLLECTED)} {escape(MEMORY_NOTE)}</p>')
     return _shell("".join(parts))
+
+
+def _known(value: str | int | bool | None) -> str:
+    if value is None:
+        return "Unknown"
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    return escape(str(value))
+
+
+def _control(control: Control) -> str:
+    checked = (
+        f"checked {escape(control.checked_on)}" if control.checked_on else "check date unknown"
+    )
+    return f"<li>{escape(control.label)}: {escape(control.status.capitalize())} ({checked})</li>"
+
+
+def _device_reading(reading: DeviceReading) -> str:
+    source = escape(reading.source)
+    state = escape(reading.source_state.value)
+    observed = reading.observed_at.isoformat()
+    parts = [f'<li><span class="meta">{source} ({state}), read {observed}</span><ul>']
+    if reading.kind is Kind.COMPUTER:
+        parts.extend(
+            (
+                f"<li>Critical patches pending: {_known(reading.updates_critical)}</li>",
+                f"<li>Other patches pending: {_known(reading.updates_other)}</li>",
+            )
+        )
+    elif reading.kind is Kind.NETWORK_DEVICE:
+        parts.append(f"<li>Firmware update pending: {_known(reading.firmware_pending)}</li>")
+    else:
+        parts.append("<li>Patch status: Unknown</li>")
+    return "".join(parts) + "</ul></li>"
+
+
+def _device_security(device: DeviceSecurity) -> str:
+    readings = "".join(_device_reading(reading) for reading in device.readings)
+    return (
+        f'<li><span class="name">{escape(device.name)}</span><ul>'
+        f"{readings or '<li>No device reading available.</li>'}"
+        f"<li>Antivirus: {_known(device.av_status)}</li>"
+        f"<li>OS support: {_known(device.os_support)}</li></ul></li>"
+    )
+
+
+def _crypto_account(account: CryptoAccount) -> str:
+    controls = "".join(_control(control) for control in account.controls)
+    return f'<li><span class="name">{escape(account.service)}</span><ul>{controls}</ul></li>'
+
+
+def _posture(person: Person) -> str:
+    breach = person.breach
+    latest = _known(breach.latest_breach_name or breach.latest_breach_on)
+    if breach.count == 0:
+        latest = "None reported"
+    elif breach.latest_breach_name and breach.latest_breach_on:
+        latest += f" ({escape(breach.latest_breach_on)})"
+    controls = "".join(_control(control) for control in person.controls)
+    devices = "".join(_device_security(device) for device in person.devices)
+    accounts = "".join(_crypto_account(account) for account in person.crypto_accounts)
+    return (
+        f'<article class="dev"><h2>{escape(person.name)}</h2>'
+        "<h3>Breach exposure</h3><ul>"
+        f"<li>Breach count: {_known(breach.count)}</li>"
+        f"<li>Most recent breach: {latest}</li>"
+        f"<li>Passwords involved: {_known(breach.passwords_involved)}</li>"
+        f"<li>Last checked: {_known(breach.checked_on)}</li></ul>"
+        f"<h3>Protective controls</h3><ul>{controls}</ul>"
+        "<h3>Device security, worst first</h3>"
+        + (f"<ul>{devices}</ul>" if devices else '<p class="sub">No devices linked.</p>')
+        + "<h3>Custodial crypto account protections</h3>"
+        + (
+            f"<ul>{accounts}</ul>"
+            if accounts
+            else '<p class="sub">No custodial accounts recorded.</p>'
+        )
+        + "</article>"
+    )
+
+
+def _incident(incident: Incident) -> str:
+    severity = escape(incident.severity)
+    affected = ", ".join(escape(name) for name in incident.affected_people)
+    kind = "Breach notice" if incident.kind == "breach" else "Vendor incident"
+    service = f" | {escape(incident.service)}" if incident.service else ""
+    return (
+        '<article class="dev">'
+        f'<span class="pill {severity}">{severity}</span>'
+        f'<span class="name">{escape(incident.title)}</span>'
+        f'<div class="meta">{kind}{service} | Reported {escape(incident.reported_on)}</div>'
+        f"<ul><li>Affected: {affected}</li><li>Action: {escape(incident.action)}</li>"
+        f"<li>State: {escape(incident.state.capitalize())} "
+        f"(checked {escape(incident.state_checked_on)})</li></ul></article>"
+    )
+
+
+def security_page(data: Security | None) -> str:
+    header = '<p><a href="/">Devices</a></p><h1>Security</h1>'
+    if data is None:
+        return _shell(header + '<p class="locked">Security database unavailable.</p>')
+    if not data.configured:
+        return _shell(header + '<p class="sub">Security database is not configured.</p>')
+    people = "".join(_posture(person) for person in data.people)
+    feed = "".join(_incident(incident) for incident in data.incidents)
+    return _shell(
+        header
+        + (people or '<p class="sub">No people recorded.</p>')
+        + "<h2>Incident feed</h2>"
+        + (feed or '<p class="sub">No matched incidents recorded.</p>')
+    )
 
 
 def locked_page(reason: str, missing: list[str], records: list[SourceRecord], now: datetime) -> str:
