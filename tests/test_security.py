@@ -33,6 +33,7 @@ def test_security_is_linked_and_read_only():
     assert web.get("/api/v1/security", headers=HEADERS).json() == {
         "configured": False,
         "people": [],
+        "incidents": [],
     }
     for path in ("/security", "/api/v1/security"):
         assert web.post(path, headers=HEADERS).status_code == 405
@@ -183,3 +184,63 @@ def test_failed_source_never_reports_old_patch_or_firmware_values_as_current(sec
     page = web.get("/security", headers=HEADERS).text
     assert "Critical patches pending: Unknown" in page
     assert "Action1 (failed)" in page
+
+
+def test_incident_feed_matches_services_and_keeps_dated_states(security_db):
+    with closing(sqlite3.connect(security_db)) as db:
+        db.executescript("""
+            PRAGMA foreign_keys = ON;
+            INSERT INTO services (id, name) VALUES
+                (1, 'TEST-SERVICE'), (2, 'TEST-UNUSED');
+            INSERT INTO service_accounts (person_id, service_id) VALUES (1, 1), (2, 1);
+            INSERT INTO incidents (id, kind, service_id, person_id, title, severity, action,
+                                   reported_on, state, state_checked_on) VALUES
+                (1, 'vendor', 1, NULL, 'TEST-VENDOR', 'high', 'Update <version>',
+                 '2026-02-01', 'open', '2026-02-01'),
+                (2, 'breach', 1, 1, 'TEST-BREACH', 'critical', 'Review account sign-ins',
+                 '2026-02-02', 'done', '2026-02-03'),
+                (3, 'vendor', 1, NULL, 'TEST-DISMISSED', 'low', 'Review notice',
+                 '2026-02-02', 'dismissed', '2026-02-03'),
+                (4, 'vendor', 2, NULL, 'TEST-UNMATCHED', 'critical', 'Review notice',
+                 '2026-02-02', 'open', '2026-02-02'),
+                (5, 'breach', NULL, 2, 'TEST-OTHER-BREACH', 'low', 'Review notice',
+                 '2026-02-01', 'dismissed', '2026-02-02');
+        """)
+    web = client([], security_db=security_db)
+    feed = web.get("/api/v1/security", headers=HEADERS).json()["incidents"]
+    assert [item["title"] for item in feed] == [
+        "TEST-VENDOR",
+        "TEST-BREACH",
+        "TEST-DISMISSED",
+        "TEST-OTHER-BREACH",
+    ]
+    assert feed[0] == {
+        "id": 1,
+        "kind": "vendor",
+        "service": "TEST-SERVICE",
+        "title": "TEST-VENDOR",
+        "severity": "high",
+        "action": "Update <version>",
+        "reported_on": "2026-02-01",
+        "state": "open",
+        "state_checked_on": "2026-02-01",
+        "affected_people": ["TEST-ADULT <b>", "TEST-SECOND"],
+    }
+    assert feed[1]["affected_people"] == ["TEST-ADULT <b>"]
+    assert feed[1]["state"] == "done" and feed[1]["state_checked_on"] == "2026-02-03"
+    assert feed[2]["state"] == "dismissed"
+    assert feed[3]["service"] is None and feed[3]["affected_people"] == ["TEST-SECOND"]
+    page = web.get("/security", headers=HEADERS).text
+    assert "TEST-VENDOR" in page and "Action: Update &lt;version&gt;" in page
+    assert "TEST-UNMATCHED" not in page
+    assert "Affected: TEST-ADULT &lt;b&gt;, TEST-SECOND" in page
+    assert "State: Done (checked 2026-02-03)" in page
+    assert "State: Dismissed (checked 2026-02-03)" in page
+
+    with closing(sqlite3.connect(security_db)) as db, db:
+        db.execute(
+            "UPDATE incidents SET state = 'done', state_checked_on = '2026-02-04' WHERE id=1"
+        )
+    feed = web.get("/api/v1/security", headers=HEADERS).json()["incidents"]
+    vendor = next(item for item in feed if item["id"] == 1)
+    assert vendor["state"] == "done" and vendor["state_checked_on"] == "2026-02-04"

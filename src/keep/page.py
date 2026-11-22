@@ -7,7 +7,7 @@ from html import escape
 
 from keep.inventory import Device, Severity, View
 from keep.model import Kind, SourceFailure, SourceRecord, SourceState
-from keep.security import Control, DeviceReading, DeviceSecurity, Person, Security
+from keep.security import Control, DeviceReading, DeviceSecurity, Incident, Person, Security
 
 SEVERITY_LABELS = {
     Severity.CRITICAL: "critical",
@@ -221,15 +221,36 @@ def _posture(person: Person) -> str:
     )
 
 
+def _incident(incident: Incident) -> str:
+    severity = escape(incident.severity)
+    affected = ", ".join(escape(name) for name in incident.affected_people)
+    kind = "Breach notice" if incident.kind == "breach" else "Vendor incident"
+    service = f" | {escape(incident.service)}" if incident.service else ""
+    return (
+        '<article class="dev">'
+        f'<span class="pill {severity}">{severity}</span>'
+        f'<span class="name">{escape(incident.title)}</span>'
+        f'<div class="meta">{kind}{service} | Reported {escape(incident.reported_on)}</div>'
+        f"<ul><li>Affected: {affected}</li><li>Action: {escape(incident.action)}</li>"
+        f"<li>State: {escape(incident.state.capitalize())} "
+        f"(checked {escape(incident.state_checked_on)})</li></ul></article>"
+    )
+
+
 def security_page(data: Security | None) -> str:
     header = '<p><a href="/">Devices</a></p><h1>Security</h1>'
     if data is None:
         return _shell(header + '<p class="locked">Security database unavailable.</p>')
     if not data.configured:
         return _shell(header + '<p class="sub">Security database is not configured.</p>')
-    if not data.people:
-        return _shell(header + '<p class="sub">No people recorded.</p>')
-    return _shell(header + "".join(_posture(person) for person in data.people))
+    people = "".join(_posture(person) for person in data.people)
+    feed = "".join(_incident(incident) for incident in data.incidents)
+    return _shell(
+        header
+        + (people or '<p class="sub">No people recorded.</p>')
+        + "<h2>Incident feed</h2>"
+        + (feed or '<p class="sub">No matched incidents recorded.</p>')
+    )
 
 
 def locked_page(reason: str, missing: list[str], records: list[SourceRecord], now: datetime) -> str:

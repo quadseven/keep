@@ -69,9 +69,24 @@ class Person:
 
 
 @dataclass(frozen=True)
+class Incident:
+    id: int
+    kind: str
+    service: str | None
+    title: str
+    severity: str
+    action: str
+    reported_on: str
+    state: str
+    state_checked_on: str
+    affected_people: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class Security:
     configured: bool
     people: list[Person] = field(default_factory=list)
+    incidents: list[Incident] = field(default_factory=list)
 
 
 type DeviceKey = tuple[str, str]
@@ -125,6 +140,30 @@ def _person(
     )
 
 
+def _incidents(db: sqlite3.Connection) -> list[Incident]:
+    rows = db.execute("""
+        SELECT i.id, i.kind, s.name AS service, i.title, i.severity, i.action,
+               i.reported_on, i.state, i.state_checked_on, p.name AS affected
+        FROM incidents i
+        LEFT JOIN services s ON s.id = i.service_id
+        LEFT JOIN service_accounts a ON i.kind = 'vendor' AND a.service_id = i.service_id
+        JOIN people p ON p.id = coalesce(i.person_id, a.person_id)
+        ORDER BY CASE i.state WHEN 'open' THEN 0 WHEN 'done' THEN 1 ELSE 2 END,
+                 CASE i.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+                                 WHEN 'medium' THEN 2 ELSE 3 END,
+                 i.reported_on DESC, i.id DESC, p.id
+    """)
+    incidents: dict[int, Incident] = {}
+    for row in rows:
+        key = row["id"]
+        if key not in incidents:
+            details = dict(row)
+            del details["affected"]
+            incidents[key] = Incident(**details)
+        incidents[key].affected_people.append(row["affected"])
+    return list(incidents.values())
+
+
 def load(path: Path | None, records: list[SourceRecord], now: datetime) -> Security:
     if path is None:
         return Security(configured=False)
@@ -155,4 +194,5 @@ def load(path: Path | None, records: list[SourceRecord], now: datetime) -> Secur
                        breach_checked_on FROM people ORDER BY id
             """)
         ]
-    return Security(configured=True, people=people)
+        incidents = _incidents(db)
+    return Security(configured=True, people=people, incidents=incidents)

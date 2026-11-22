@@ -44,13 +44,15 @@ Use a local database editor with foreign keys enabled (`PRAGMA foreign_keys = ON
 
 Link existing devices to a person in `device_owners`. Set `source` to `Action1` and `source_ref` to the endpoint ID, or use `UniFi` and the lowercase MAC address with colon separators. Use `label` to identify the device when there is no matching reading. The roll-up uses the inventory page's worst-first order and shows patch and firmware status from current readings. Antivirus and OS support are unknown because the existing collectors do not report them.
 
+Record services in `services` and link their users in `service_accounts`. Enter notices in `incidents` with a report date, severity, short title, and concrete action. A `vendor` incident, including a supply-chain notice, uses `service_id` and appears for everyone linked to that service. A `breach` notice uses `person_id` and can also reference a known `service_id`. Enter `open`, `done`, or `dismissed` with its `state_checked_on` date. Update both fields together when the operator confirms a change.
+
 ## JSON API
 
 All routes take the same sign-in as the page and answer 403 with a reason to anyone the page refuses. The API is read-only.
 
 - `GET /api/v1/devices`: every device in page order (needs attention worst first, then unknown, healthy, and network-only clients). Each has a `status`, its findings, what is unknown about it, and the raw reading from each source.
 - `GET /api/v1/sources`: each source's state and reason, matching the page's source panel.
-- `GET /api/v1/security`: the Security page's per-person breach summary, dated protective controls, and device roll-up. Unknown readings, counts, and dates are `null`.
+- `GET /api/v1/security`: the Security page's per-person breach summary, dated protective controls, device roll-up, and matched incident feed. Unknown readings, counts, and dates are `null`.
 
 An unknown count is `null`, never `0`, and a device read only from a failed source is never `healthy`.
 

@@ -32,4 +32,31 @@ CREATE TABLE device_owners (
     PRIMARY KEY (person_id, source, source_ref)
 ) STRICT;
 
+CREATE TABLE services (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE CHECK (length(trim(name)) > 0)
+) STRICT;
+
+CREATE TABLE service_accounts (
+    person_id INTEGER NOT NULL REFERENCES people(id),
+    service_id INTEGER NOT NULL REFERENCES services(id),
+    PRIMARY KEY (person_id, service_id)
+) STRICT;
+
+CREATE TABLE incidents (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL CHECK (kind IN ('breach', 'vendor')),
+    service_id INTEGER REFERENCES services(id),
+    person_id INTEGER REFERENCES people(id),
+    title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+    severity TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
+    action TEXT NOT NULL CHECK (length(trim(action)) > 0),
+    reported_on TEXT NOT NULL CHECK (date(reported_on, '+0 days') IS reported_on),
+    state TEXT NOT NULL CHECK (state IN ('open', 'done', 'dismissed')),
+    state_checked_on TEXT NOT NULL CHECK (date(state_checked_on, '+0 days') IS state_checked_on),
+    CHECK (state_checked_on >= reported_on),
+    CHECK ((kind = 'breach' AND person_id IS NOT NULL) OR
+           (kind = 'vendor' AND service_id IS NOT NULL AND person_id IS NULL))
+) STRICT;
+
 COMMIT;
