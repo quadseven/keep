@@ -49,6 +49,7 @@ def test_security_shows_dated_verified_posture_and_unknowns(security_db):
     adult, second = payload["people"]
     assert adult["breach"] == {
         "count": 2,
+        "latest_breach_name": None,
         "latest_breach_on": "2026-01-01",
         "passwords_involved": True,
         "checked_on": "2026-01-02",
@@ -79,6 +80,23 @@ def test_security_shows_dated_verified_posture_and_unknowns(security_db):
     assert "Equifax credit freeze: In place (checked 2026-01-03)" in page.text
     assert "Experian credit freeze: Unknown (check date unknown)" in page.text
     assert "Breach count: Unknown" in page.text
+
+
+def test_breach_summary_names_the_latest_notice_and_preserves_confirmed_zero(security_db):
+    with closing(sqlite3.connect(security_db)) as db:
+        db.executescript("""
+            UPDATE people SET latest_breach_name = 'TEST-BREACH <b>' WHERE id = 1;
+            UPDATE people SET breach_count = 0, passwords_involved = 0,
+                breach_checked_on = '2026-01-04' WHERE id = 2;
+        """)
+    web = client([], security_db=security_db)
+    adult, second = web.get("/api/v1/security", headers=HEADERS).json()["people"]
+    assert adult["breach"]["latest_breach_name"] == "TEST-BREACH <b>"
+    assert second["breach"]["count"] == 0 and second["breach"]["passwords_involved"] is False
+    page = web.get("/security", headers=HEADERS).text
+    assert "Most recent breach: TEST-BREACH &lt;b&gt; (2026-01-01)" in page
+    assert "Most recent breach: None reported" in page
+    assert "Passwords involved: No" in page
 
 
 def test_security_refuses_unauthenticated_requests_before_reading_database(tmp_path):
@@ -244,3 +262,54 @@ def test_incident_feed_matches_services_and_keeps_dated_states(security_db):
     feed = web.get("/api/v1/security", headers=HEADERS).json()["incidents"]
     vendor = next(item for item in feed if item["id"] == 1)
     assert vendor["state"] == "done" and vendor["state_checked_on"] == "2026-02-04"
+
+
+def test_custodial_account_controls_show_verified_and_unknown_states(security_db):
+    with closing(sqlite3.connect(security_db)) as db:
+        db.executescript("""
+            PRAGMA foreign_keys = ON;
+            INSERT INTO services (id, name) VALUES
+                (1, 'TEST-CUSTODY <b>'), (2, 'TEST-OTHER-CUSTODY'), (3, 'TEST-REGULAR');
+            INSERT INTO service_accounts (person_id, service_id) VALUES
+                (1, 1), (1, 3), (2, 2);
+            INSERT INTO crypto_accounts (person_id, service_id, mfa_status, mfa_checked_on,
+                                         withdrawal_status, withdrawal_checked_on) VALUES
+                (1, 1, 'in place', '2026-01-04', 'not offered', '2026-01-05');
+            INSERT INTO crypto_accounts (person_id, service_id) VALUES (2, 2);
+        """)
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute(
+                "UPDATE crypto_accounts SET withdrawal_status = 'in place' WHERE person_id=2"
+            )
+
+    web = client([], security_db=security_db)
+    adult, second = web.get("/api/v1/security", headers=HEADERS).json()["people"]
+    assert [account["service"] for account in adult["crypto_accounts"]] == ["TEST-CUSTODY <b>"]
+    assert adult["crypto_accounts"][0]["controls"] == [
+        {"key": "mfa", "label": "Passkey or 2FA", "status": "in place", "checked_on": "2026-01-04"},
+        {
+            "key": "withdrawal",
+            "label": "Withdrawal controls",
+            "status": "not offered",
+            "checked_on": "2026-01-05",
+        },
+    ]
+    assert [account["service"] for account in second["crypto_accounts"]] == ["TEST-OTHER-CUSTODY"]
+    controls = second["crypto_accounts"][0]["controls"]
+    assert [(control["status"], control["checked_on"]) for control in controls] == [
+        ("unknown", None),
+        ("unknown", None),
+    ]
+    page = web.get("/security", headers=HEADERS).text
+    assert "TEST-CUSTODY &lt;b&gt;" in page and "TEST-REGULAR" not in page
+    assert "Passkey or 2FA: In place (checked 2026-01-04)" in page
+    assert "Withdrawal controls: Not offered (checked 2026-01-05)" in page
+    assert "Withdrawal controls: Unknown (check date unknown)" in page
+
+
+def test_security_routes_keep_household_data_behind_sign_in(security_db):
+    web = client([], security_db=security_db)
+    for route in ("/security", "/api/v1/security"):
+        response = web.get(route)
+        assert response.status_code == 403
+        assert "TEST-ADULT" not in response.text

@@ -7,7 +7,15 @@ from html import escape
 
 from keep.inventory import Device, Severity, View
 from keep.model import Kind, SourceFailure, SourceRecord, SourceState
-from keep.security import Control, DeviceReading, DeviceSecurity, Incident, Person, Security
+from keep.security import (
+    Control,
+    CryptoAccount,
+    DeviceReading,
+    DeviceSecurity,
+    Incident,
+    Person,
+    Security,
+)
 
 SEVERITY_LABELS = {
     Severity.CRITICAL: "critical",
@@ -199,9 +207,21 @@ def _device_security(device: DeviceSecurity) -> str:
     )
 
 
+def _crypto_account(account: CryptoAccount) -> str:
+    controls = "".join(_control(control) for control in account.controls)
+    return f'<li><span class="name">{escape(account.service)}</span><ul>{controls}</ul></li>'
+
+
 def _posture(person: Person) -> str:
     breach = person.breach
-    latest = "None reported" if breach.count == 0 else _known(breach.latest_breach_on)
+    latest = _known(breach.latest_breach_name or breach.latest_breach_on)
+    if breach.count == 0:
+        latest = "None reported"
+    elif breach.latest_breach_name and breach.latest_breach_on:
+        latest += f" ({escape(breach.latest_breach_on)})"
+    controls = "".join(_control(control) for control in person.controls)
+    devices = "".join(_device_security(device) for device in person.devices)
+    accounts = "".join(_crypto_account(account) for account in person.crypto_accounts)
     return (
         f'<article class="dev"><h2>{escape(person.name)}</h2>'
         "<h3>Breach exposure</h3><ul>"
@@ -209,13 +229,14 @@ def _posture(person: Person) -> str:
         f"<li>Most recent breach: {latest}</li>"
         f"<li>Passwords involved: {_known(breach.passwords_involved)}</li>"
         f"<li>Last checked: {_known(breach.checked_on)}</li></ul>"
-        "<h3>Protective controls</h3><ul>"
-        + "".join(_control(control) for control in person.controls)
-        + "</ul><h3>Device security, worst first</h3>"
+        f"<h3>Protective controls</h3><ul>{controls}</ul>"
+        "<h3>Device security, worst first</h3>"
+        + (f"<ul>{devices}</ul>" if devices else '<p class="sub">No devices linked.</p>')
+        + "<h3>Custodial crypto account protections</h3>"
         + (
-            "<ul>" + "".join(_device_security(device) for device in person.devices) + "</ul>"
-            if person.devices
-            else '<p class="sub">No devices linked.</p>'
+            f"<ul>{accounts}</ul>"
+            if accounts
+            else '<p class="sub">No custodial accounts recorded.</p>'
         )
         + "</article>"
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections import defaultdict
 from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -27,6 +28,7 @@ CONTROLS = (
 @dataclass(frozen=True)
 class Breach:
     count: int | None
+    latest_breach_name: str | None
     latest_breach_on: str | None
     passwords_involved: bool | None
     checked_on: str | None
@@ -61,11 +63,18 @@ class DeviceSecurity:
 
 
 @dataclass(frozen=True)
+class CryptoAccount:
+    service: str
+    controls: list[Control]
+
+
+@dataclass(frozen=True)
 class Person:
     name: str
     breach: Breach
     controls: list[Control]
     devices: list[DeviceSecurity]
+    crypto_accounts: list[CryptoAccount]
 
 
 @dataclass(frozen=True)
@@ -122,13 +131,17 @@ def _devices(
 
 
 def _person(
-    row: sqlite3.Row, saved: dict[str, tuple[str, str | None]], devices: list[DeviceSecurity]
+    row: sqlite3.Row,
+    saved: dict[str, tuple[str, str | None]],
+    devices: list[DeviceSecurity],
+    crypto_accounts: list[CryptoAccount],
 ) -> Person:
     passwords = row["passwords_involved"]
     return Person(
         name=row["name"],
         breach=Breach(
             row["breach_count"],
+            row["latest_breach_name"],
             row["latest_breach_on"],
             None if passwords is None else bool(passwords),
             row["breach_checked_on"],
@@ -137,7 +150,35 @@ def _person(
             Control(key, label, *saved.get(key, ("unknown", None))) for key, label in CONTROLS
         ],
         devices=devices,
+        crypto_accounts=crypto_accounts,
     )
+
+
+def _crypto_accounts(db: sqlite3.Connection) -> dict[int, list[CryptoAccount]]:
+    accounts = defaultdict(list)
+    for row in db.execute("""
+        SELECT c.person_id, s.name, c.mfa_status, c.mfa_checked_on,
+               c.withdrawal_status, c.withdrawal_checked_on
+        FROM crypto_accounts c
+        JOIN service_accounts a USING (person_id, service_id)
+        JOIN services s ON s.id = c.service_id
+        ORDER BY s.name
+    """):
+        accounts[row["person_id"]].append(
+            CryptoAccount(
+                row["name"],
+                [
+                    Control("mfa", "Passkey or 2FA", row["mfa_status"], row["mfa_checked_on"]),
+                    Control(
+                        "withdrawal",
+                        "Withdrawal controls",
+                        row["withdrawal_status"],
+                        row["withdrawal_checked_on"],
+                    ),
+                ],
+            )
+        )
+    return accounts
 
 
 def _incidents(db: sqlite3.Connection) -> list[Incident]:
@@ -185,13 +226,17 @@ def load(path: Path | None, records: list[SourceRecord], now: datetime) -> Secur
             ORDER BY label, source, source_ref
         """):
             owners.setdefault(row["person_id"], {})[row["source"], row["source_ref"]] = row["label"]
+        accounts = _crypto_accounts(db)
         people = [
             _person(
-                row, saved.get(row["id"], {}), _devices(owners.get(row["id"], {}), view, states)
+                row,
+                saved.get(row["id"], {}),
+                _devices(owners.get(row["id"], {}), view, states),
+                accounts.get(row["id"], []),
             )
             for row in db.execute("""
-                SELECT id, name, breach_count, latest_breach_on, passwords_involved,
-                       breach_checked_on FROM people ORDER BY id
+                SELECT id, name, breach_count, latest_breach_name, latest_breach_on,
+                       passwords_involved, breach_checked_on FROM people ORDER BY id
             """)
         ]
         incidents = _incidents(db)
