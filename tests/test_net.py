@@ -8,7 +8,7 @@ import pytest
 import trustme
 
 from keep.model import SourceError
-from keep.net import Limits, fetch_json
+from keep.net import Limits, _context, fetch_json
 
 
 class Server:
@@ -145,3 +145,11 @@ def test_a_refused_connection_is_a_failure():
     with pytest.raises(SourceError) as caught:
         fetch_json(f"https://127.0.0.1:{port}/")
     assert caught.value.reason == "connection failed"
+
+
+def test_ssl_context_is_reused_for_the_same_trust_anchor():
+    first = Server(http(200, b"{}"))
+    second = Server(http(200, b"{}"))
+    assert _context(None) is _context(None)
+    assert _context(first.pem) is _context(first.pem)
+    assert _context(first.pem) is not _context(second.pem)

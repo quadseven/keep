@@ -10,7 +10,7 @@ from datetime import datetime
 from itertools import chain
 from pathlib import Path
 
-from keep.inventory import View, build
+from keep.inventory import Device, View, build
 from keep.model import Kind, Observation, SourceRecord, SourceState
 
 CONTROLS = (
@@ -115,17 +115,33 @@ def _reading(observation: Observation, state: SourceState) -> DeviceReading:
     )
 
 
+def _index_devices(view: View) -> dict[DeviceKey, tuple[int, Device]]:
+    index: dict[DeviceKey, tuple[int, Device]] = {}
+    for rank, device in enumerate(chain(view.attention, view.unknown, view.healthy, view.clients)):
+        for item in device.observations:
+            index.setdefault((item.source, item.ref), (rank, device))
+    return index
+
+
 def _devices(
-    owners: dict[DeviceKey, str], view: View, states: dict[str, SourceState]
+    owners: dict[DeviceKey, str],
+    device_index: dict[DeviceKey, tuple[int, Device]],
+    states: dict[str, SourceState],
 ) -> list[DeviceSecurity]:
-    result: list[DeviceSecurity] = []
+    matched_by_rank: dict[int, Device] = {}
     seen: set[DeviceKey] = set()
-    for device in chain(view.attention, view.unknown, view.healthy, view.clients):
-        matched = {(item.source, item.ref) for item in device.observations} & owners.keys()
-        if matched:
-            seen.update(matched)
-            readings = [_reading(item, states[item.source]) for item in device.observations]
-            result.append(DeviceSecurity(device.name, readings))
+    for key in owners:
+        entry = device_index.get(key)
+        if entry is not None:
+            rank, device = entry
+            matched_by_rank[rank] = device
+            seen.add(key)
+    result = [
+        DeviceSecurity(
+            device.name, [_reading(item, states[item.source]) for item in device.observations]
+        )
+        for _, device in sorted(matched_by_rank.items())
+    ]
     result.extend(DeviceSecurity(label) for key, label in owners.items() if key not in seen)
     return result
 
@@ -209,7 +225,6 @@ def load(path: Path | None, records: list[SourceRecord], now: datetime) -> Secur
     if path is None:
         return Security(configured=False)
 
-    view = build(records, now)
     states = {record.name: record.state for record in records}
     with closing(sqlite3.connect(f"{path.absolute().as_uri()}?mode=ro", uri=True)) as db:
         db.row_factory = sqlite3.Row
@@ -226,12 +241,13 @@ def load(path: Path | None, records: list[SourceRecord], now: datetime) -> Secur
             ORDER BY label, source, source_ref
         """):
             owners.setdefault(row["person_id"], {})[row["source"], row["source_ref"]] = row["label"]
+        device_index = _index_devices(build(records, now)) if owners else {}
         accounts = _crypto_accounts(db)
         people = [
             _person(
                 row,
                 saved.get(row["id"], {}),
-                _devices(owners.get(row["id"], {}), view, states),
+                _devices(owners.get(row["id"], {}), device_index, states),
                 accounts.get(row["id"], []),
             )
             for row in db.execute("""

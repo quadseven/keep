@@ -46,6 +46,8 @@ CREATE TABLE service_accounts (
     PRIMARY KEY (person_id, service_id)
 ) STRICT;
 
+CREATE INDEX idx_service_accounts_service_id ON service_accounts(service_id);
+
 CREATE TABLE crypto_accounts (
     person_id INTEGER NOT NULL,
     service_id INTEGER NOT NULL,

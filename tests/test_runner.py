@@ -1,3 +1,5 @@
+import threading
+
 from keep.model import SourceError, SourceState
 from keep.runner import Runner
 
@@ -67,3 +69,25 @@ def test_one_bad_source_does_not_stop_the_next():
     runner.collect_once()
     records, _ = runner.snapshot()
     assert records[1].state is SourceState.OK
+
+
+def test_collectors_run_concurrently():
+    barrier = threading.Barrier(2, timeout=2.0)
+
+    class BarrierCollector:
+        def __init__(self, name):
+            self.name = name
+
+        def missing(self):
+            return []
+
+        def collect(self):
+            barrier.wait()
+            return [self.name]
+
+    runner = Runner([BarrierCollector("First"), BarrierCollector("Second")], 60)
+    runner.collect_once()
+    records, failures = runner.snapshot()
+    assert not failures
+    assert [record.state for record in records] == [SourceState.OK, SourceState.OK]
+    assert [record.observations for record in records] == [["First"], ["Second"]]

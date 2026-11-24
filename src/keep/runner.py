@@ -10,6 +10,7 @@ import logging
 import threading
 from collections import deque
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from copy import copy
 from datetime import UTC, datetime
 
@@ -43,34 +44,45 @@ class Runner:
             record.last_attempt = now
             self.failures.append(SourceFailure(collector.name, now, reason))
 
-    def collect_once(self) -> None:
-        for collector in self.collectors:
-            now = datetime.now(UTC)
-            missing = collector.missing()
-            if missing:
-                with self.lock:
-                    record = self.records[collector.name]
-                    record.state = SourceState.NOT_CONFIGURED
-                    record.reason = "missing " + ", ".join(missing)
-                    record.last_attempt = now
-                continue
-            try:
-                observations = collector.collect()
-            except SourceError as error:
-                self._fail(collector, now, error.reason)
-                continue
-            except Exception as error:  # noqa: BLE001 - one source must not stop the others
-                log.exception("source_crashed source=%s", collector.name)
-                self._fail(collector, now, f"collector error: {type(error).__name__}")
-                continue
+    def _collect_one(self, collector: Collector) -> None:
+        now = datetime.now(UTC)
+        missing = collector.missing()
+        if missing:
             with self.lock:
                 record = self.records[collector.name]
-                record.state = SourceState.OK
-                record.reason = None
+                record.state = SourceState.NOT_CONFIGURED
+                record.reason = "missing " + ", ".join(missing)
                 record.last_attempt = now
-                record.last_success = now
-                record.observations = observations
-            log.info("source_ok source=%s observations=%d", collector.name, len(observations))
+            return
+        try:
+            observations = collector.collect()
+        except SourceError as error:
+            self._fail(collector, now, error.reason)
+            return
+        except Exception as error:  # noqa: BLE001 - one source must not stop the others
+            log.exception("source_crashed source=%s", collector.name)
+            self._fail(collector, now, f"collector error: {type(error).__name__}")
+            return
+        with self.lock:
+            record = self.records[collector.name]
+            record.state = SourceState.OK
+            record.reason = None
+            record.last_attempt = now
+            record.last_success = now
+            record.observations = observations
+        log.info("source_ok source=%s observations=%d", collector.name, len(observations))
+
+    def collect_once(self) -> None:
+        if len(self.collectors) <= 1:
+            for collector in self.collectors:
+                self._collect_one(collector)
+            return
+        with ThreadPoolExecutor(
+            max_workers=len(self.collectors), thread_name_prefix="keep-collect"
+        ) as pool:
+            futures = [pool.submit(self._collect_one, collector) for collector in self.collectors]
+            for future in futures:
+                future.result()
 
     def _loop(self) -> None:
         while not self.stop.is_set():

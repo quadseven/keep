@@ -358,3 +358,19 @@ def test_security_routes_keep_household_data_behind_sign_in(security_db):
         response = web.get(route)
         assert response.status_code == 403
         assert "TEST-ADULT" not in response.text
+
+
+def test_vendor_incident_join_uses_service_accounts_index(security_with_incidents):
+    with closing(sqlite3.connect(security_with_incidents)) as db:
+        plan = "\n".join(
+            row[3]
+            for row in db.execute("""
+                EXPLAIN QUERY PLAN
+                SELECT i.id, p.name
+                FROM incidents i
+                LEFT JOIN service_accounts a
+                    ON i.kind = 'vendor' AND a.service_id = i.service_id
+                JOIN people p ON p.id = coalesce(i.person_id, a.person_id)
+            """)
+        )
+    assert "idx_service_accounts_service_id" in plan

@@ -8,9 +8,11 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from starlette.middleware.gzip import GZipMiddleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from keep import api, security
 from keep.collectors.action1 import Action1Collector
@@ -29,16 +31,43 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
 }
+_SECURITY_HEADER_PAIRS = tuple(
+    (name.lower().encode("latin-1"), value.encode("latin-1"))
+    for name, value in SECURITY_HEADERS.items()
+)
+_SECURITY_HEADER_KEYS = frozenset(name for name, _ in _SECURITY_HEADER_PAIRS)
+GZIP_MINIMUM_SIZE = 500
+
+
+class _SecurityHeadersMiddleware:
+    """Pure ASGI security-header wrapper without BaseHTTPMiddleware overhead."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = [
+                    (name, value)
+                    for name, value in message.get("headers", ())
+                    if name.lower() not in _SECURITY_HEADER_KEYS
+                ]
+                headers.extend(_SECURITY_HEADER_PAIRS)
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 def create_app(gate: Gate, runner: Runner, *, security_db: Path | None = None) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-
-    @app.middleware("http")
-    async def harden(request: Request, call_next) -> Response:
-        response = await call_next(request)
-        response.headers.update(SECURITY_HEADERS)
-        return response
+    app.add_middleware(GZipMiddleware, minimum_size=GZIP_MINIMUM_SIZE)
+    app.add_middleware(_SecurityHeadersMiddleware)
 
     @app.get("/livez")
     def livez() -> PlainTextResponse:
