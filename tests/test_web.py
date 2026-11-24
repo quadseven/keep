@@ -100,3 +100,18 @@ def test_there_are_no_write_routes_or_docs():
     web = client([])
     assert web.post("/", headers=HEADERS).status_code == 405
     assert web.get("/docs").status_code == 404 and web.get("/openapi.json").status_code == 404
+
+
+def test_gzip_compresses_large_responses_and_keeps_security_headers():
+    items = [obs(f"TEST-HOST-{index}", ref=str(index)) for index in range(10)]
+    web = client([ok_record(*items)])
+    headers = {**HEADERS, "Accept-Encoding": "gzip"}
+    for path in ("/", "/api/v1/devices"):
+        response = web.get(path, headers=headers)
+        assert response.status_code == 200
+        assert response.headers.get("content-encoding") == "gzip"
+        assert "Accept-Encoding" in response.headers.get("vary", "")
+        assert response.headers["cache-control"] == "no-store"
+        assert response.headers["x-frame-options"] == "DENY"
+        assert response.headers["x-content-type-options"] == "nosniff"
+    assert len(web.get("/api/v1/devices", headers=headers).json()["devices"]) == 10

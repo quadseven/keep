@@ -16,6 +16,7 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 from urllib.parse import SplitResult, urlsplit
 
@@ -35,6 +36,7 @@ class Limits:
     max_bytes: int = MAX_BYTES
 
 
+@lru_cache(maxsize=16)
 def _context(trust_pem: str | None) -> ssl.SSLContext:
     if not trust_pem:
         return ssl.create_default_context()
